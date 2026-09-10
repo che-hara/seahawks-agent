@@ -146,6 +146,13 @@ async function postToBluesky(text) {
   return await res.json();
 }
 
+// at://did:plc:xxx/app.bsky.feed.post/<rkey> -> https://bsky.app/profile/<handle>/post/<rkey>
+function bskyPostUrl(uri, handle) {
+  if (!uri || !handle) return null;
+  const rkey = uri.replace("at://", "").split("/")[2];
+  return rkey ? `https://bsky.app/profile/${handle}/post/${rkey}` : null;
+}
+
 async function fetchMyPosts() {
   if (!blueskySession) return [];
   try {
@@ -188,8 +195,12 @@ async function fetchFanSentiment() {
     }
     const data = await res.json();
     return (data.posts || [])
-      .map((p) => p.record?.text || "")
-      .filter((t) => t.length > 0 && t.length < 200)
+      .map((p) => ({
+        text: p.record?.text || "",
+        handle: p.author?.handle || "",
+        url: bskyPostUrl(p.uri, p.author?.handle),
+      }))
+      .filter((f) => f.text.length > 0 && f.text.length < 200)
       .slice(0, 5);
   } catch {
     return [];
@@ -556,7 +567,7 @@ ${vibe ? `\nGAME VIBE (use this to set the tone and emotional colour of your pos
   fanSentiment.length > 0
     ? `\nFAN VIBES:\n${fanSentiment
         .slice(0, 2)
-        .map((s) => `- ${s}`)
+        .map((f) => `- ${typeof f === "string" ? f : f.text}`)
         .join("\n")}`
     : ""
 }
@@ -677,13 +688,7 @@ function renderDashboard() {
     state.recentPosts.length > 0
       ? state.recentPosts
           .map((p) => {
-            const bskyUrl = p.uri
-              ? (() => {
-                  const parts = p.uri.replace("at://", "").split("/");
-                  const rkey = parts[2];
-                  return `https://bsky.app/profile/${BLUESKY_HANDLE}/post/${rkey}`;
-                })()
-              : null;
+            const bskyUrl = bskyPostUrl(p.uri, BLUESKY_HANDLE);
             const time = new Date(p.postedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
             return `<div class="recent-post">
               <span class="recent-text">${escapeHtml(p.text)}</span>
@@ -696,7 +701,17 @@ function renderDashboard() {
   const sentimentHtml =
     state.fanSentiment.length > 0
       ? state.fanSentiment
-          .map((t) => `<div class="sentiment-item">${escapeHtml(t)}</div>`)
+          .map((f) => {
+            // Tolerate the old plain-string shape in case of a mid-game restart.
+            const item = typeof f === "string" ? { text: f, handle: "", url: null } : f;
+            const body = escapeHtml(item.text);
+            const byline = item.handle
+              ? `<span class="sentiment-handle">@${escapeHtml(item.handle)} ↗</span>`
+              : "";
+            return item.url
+              ? `<a class="sentiment-item sentiment-link" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${body}${byline}</a>`
+              : `<div class="sentiment-item">${body}${byline}</div>`;
+          })
           .join("")
       : `<div class="empty-msg">No fan posts found</div>`;
 
@@ -874,6 +889,17 @@ function renderDashboard() {
       padding: 7px 0; border-bottom: 1px solid #1a2b40;
     }
     .sentiment-item:last-child { border-bottom: none; }
+    .sentiment-link {
+      display: block; text-decoration: none; color: #8899aa;
+      transition: color 0.15s ease, background 0.15s ease;
+      padding-left: 6px; margin-left: -6px; border-radius: 4px;
+    }
+    .sentiment-link:hover { color: #cfe3f5; background: #12203200; background: #122032; }
+    .sentiment-link:hover .sentiment-handle { color: #69be28; }
+    .sentiment-handle {
+      display: block; margin-top: 3px; font-size: 11px;
+      color: #5a6f85; letter-spacing: 0.02em;
+    }
   </style>
 </head>
 <body>
