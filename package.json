@@ -1,0 +1,16 @@
+{
+  "name": "seahawks-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Auto-posts live Seattle Seahawks commentary to Bluesky, with an approval dashboard.",
+  "type": "module",
+  "main": "seahawksagent.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node seahawksagent.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.0",
+    "node-fetch": "^3.3.2"
+  }
+}
