@@ -206,12 +206,69 @@ const ESPN_SCOREBOARD_URL =
 const ESPN_SUMMARY_URL = (eventId) =>
   `https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${eventId}`;
 
+// ESPN's edge (Akamai) rejects bare programmatic user agents with a 403, so
+// every request goes out looking like a browser hitting espn.com.
+const ESPN_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  Accept: "application/json, text/plain, */*",
+  "Accept-Language": "en-US,en;q=0.9",
+  Referer: "https://www.espn.com/nfl/scoreboard",
+  Origin: "https://www.espn.com",
+};
+
+// Mirrors of the same data. If the primary host blocks us, fall through.
+const SCOREBOARD_HOSTS = [
+  "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+  "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+];
+const SUMMARY_HOSTS = [
+  (id) => `https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${id}`,
+  (id) => `https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${id}`,
+];
+
+// GET with browser headers, retrying transient failures. Logs a snippet of the
+// response body on failure so a block is diagnosable from the Railway logs
+// rather than just a bare status code.
+async function espnFetch(url, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, { headers: ESPN_HEADERS });
+      if (res.ok) return res;
+      const body = await res.text().catch(() => "");
+      lastErr = new Error(
+        `${res.status} ${res.statusText} — ${body.slice(0, 160).replace(/\s+/g, " ")}`
+      );
+      // Retry rate limits and server errors; a hard 4xx won't fix itself.
+      if (res.status !== 429 && res.status < 500) break;
+    } catch (err) {
+      lastErr = err;
+    }
+    await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+  }
+  throw lastErr;
+}
+
+// Try each mirror in turn; only give up when every one has failed.
+async function espnFetchAny(urls, label) {
+  const errors = [];
+  for (const url of urls) {
+    try {
+      return await espnFetch(url);
+    } catch (err) {
+      errors.push(`${new URL(url).host}: ${err.message}`);
+    }
+  }
+  throw new Error(`${label} failed — ${errors.join(" | ")}`);
+}
+
 // Calling this with no date params returns the *current NFL week's* games,
 // which is exactly what we want for a once-a-week team like the Seahawks
 // (there's no "today's game" the way there is for a daily MLB schedule).
 async function fetchScoreboard() {
-  const res = await fetch(ESPN_SCOREBOARD_URL);
-  if (!res.ok) throw new Error(`ESPN scoreboard fetch failed: ${res.status}`);
+  const res = await espnFetchAny(SCOREBOARD_HOSTS, "ESPN scoreboard fetch");
   return await res.json();
 }
 
@@ -236,8 +293,13 @@ async function refreshCompetitionFromScoreboard(gameId) {
 }
 
 async function fetchGameSummary(gameId) {
-  const res = await fetch(ESPN_SUMMARY_URL(gameId));
-  if (!res.ok) return null;
+  let res;
+  try {
+    res = await espnFetchAny(SUMMARY_HOSTS.map((f) => f(gameId)), "ESPN summary fetch");
+  } catch (err) {
+    console.error("Summary fetch failed:", err.message);
+    return null;
+  }
   const data = await res.json();
   return data.boxscore || null;
 }
