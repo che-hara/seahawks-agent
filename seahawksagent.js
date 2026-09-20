@@ -30,6 +30,11 @@ const SENTIMENT_QUERY = "Seattle Seahawks";
 const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
 const MAX_POSTS = 7;
+
+// How long a finished game's wrap-up post is held for approval before the
+// agent stops waiting and rolls over to the next matchup. Without a bound, a
+// post nobody approves pins the agent to a game that ended days ago.
+const FINAL_HOLD_MS = 3 * 60 * 60 * 1000;
 const POLL_INTERVALS = {
   waiting: 5 * 60 * 1000,
   preview: 60 * 1000,
@@ -52,6 +57,7 @@ const state = {
   postCount: 0,
   lastPlayIndex: 0,
   lastQuarterPosted: 0,
+  finalSince: null,        // ms timestamp the game first went final
   lastUpdated: null,
   error: null,
 };
@@ -411,6 +417,7 @@ function resetForNextGame(finishedId) {
   state.postCount = 0;
   state.lastPlayIndex = 0;
   state.lastQuarterPosted = 0;
+  state.finalSince = null;
   state.vibe = "";
   state.fanSentiment = [];
   state.phase = "waiting";
@@ -1120,7 +1127,12 @@ async function poll() {
     const gameId = state.game.id;
     const competition = await refreshCompetitionFromScoreboard(gameId);
     if (!competition) {
-      state.phase = "preview";
+      // The tracked event has dropped off the current week's scoreboard, which
+      // means the schedule has rolled forward. Let go of it so the next poll
+      // rediscovers this week's matchup instead of polling a game that will
+      // never appear again.
+      console.log("Tracked game is no longer on the scoreboard — rediscovering");
+      resetForNextGame(null);
       return;
     }
 
@@ -1142,6 +1154,7 @@ async function poll() {
 
     if (abstractState === "post") {
       state.phase = "final";
+      if (state.finalSince === null) state.finalSince = Date.now();
       if (!state.pendingPost && state.postCount < MAX_POSTS) {
         const result =
           gs.seahawksScore > gs.opponentScore
@@ -1208,11 +1221,20 @@ async function runPollLoop() {
   await poll();
 
   // Once a game is final and its wrap-up post has been dealt with, stand down
-  // and start watching for next week's game rather than exiting the loop.
-  if (state.phase === "final" && !state.pendingPost) {
-    const finishedId = state.game?.id ?? null;
-    console.log("Game wrapped — standing by for next week's matchup");
-    resetForNextGame(finishedId);
+  // and start watching for next week's game rather than exiting the loop. The
+  // post is held for a while so it can still be approved, but an unapproved
+  // one is not allowed to hold the agent on a finished game indefinitely.
+  if (state.phase === "final") {
+    const heldTooLong =
+      state.finalSince !== null && Date.now() - state.finalSince > FINAL_HOLD_MS;
+    if (!state.pendingPost || heldTooLong) {
+      const finishedId = state.game?.id ?? null;
+      if (heldTooLong && state.pendingPost) {
+        console.log("Wrap-up post went unapproved — dropping it and moving on");
+      }
+      console.log("Game wrapped — standing by for next week's matchup");
+      resetForNextGame(finishedId);
+    }
   }
 
   const interval = POLL_INTERVALS[state.phase] || POLL_INTERVALS.waiting;
