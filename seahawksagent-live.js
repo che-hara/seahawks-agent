@@ -1308,6 +1308,7 @@ function renderDashboard() {
     }
 
     function updateCharCount(el) {
+      lastEditAt = Date.now();
       const counter = document.getElementById("char-count");
       if (!counter) return;
       counter.textContent = el.value.length;
@@ -1337,11 +1338,13 @@ function renderDashboard() {
         if (btn) { btn.disabled = false; btn.textContent = "Approve + Post"; }
         return;
       }
+      pendingPanelForce = true;
       refresh();
     }
 
     async function rejectPost() {
       await apiFetch("/api/reject", { method: "POST" });
+      pendingPanelForce = true;
       refresh();
     }
 
@@ -1353,10 +1356,28 @@ function renderDashboard() {
     let backoff = 0;
 
     // Never overwrite a post you're in the middle of editing.
+    // Set once a draft has been submitted: the edit is finished, so the panel
+    // must be allowed to repaint even though the textarea still differs from
+    // what the server sent.
+    let pendingPanelForce = false;
+    // When the user last actually typed into the draft.
+    let lastEditAt = 0;
+    const EDIT_GRACE_MS = 2 * 60 * 1000;
+
     function editorIsBusy() {
       const ta = document.getElementById("post-edit");
       if (!ta) return false;
-      return document.activeElement === ta || ta.value !== ta.getAttribute("data-original");
+      if (document.activeElement === ta) return true;
+      // An unsaved change only counts as busy while it is actually being worked
+      // on. Without the time bound, one keystroke — or a browser extension such
+      // as Grammarly rewriting the field — left this true for the life of the
+      // page, and since the panel is what would have reset it, it never
+      // recovered: the approve button sat on "Posting..." and no later draft
+      // ever appeared.
+      return (
+        ta.value !== ta.getAttribute("data-original") &&
+        Date.now() - lastEditAt < EDIT_GRACE_MS
+      );
     }
 
     function setHtml(id, html) {
@@ -1401,7 +1422,10 @@ function renderDashboard() {
       setHtml("panel-recent", f.recentHtml);
       setHtml("panel-sentiment", f.sentimentHtml);
       setHtml("posts-counter", f.counterHtml);
-      if (!editorIsBusy()) setHtml("panel-pending", f.pendingHtml);
+      if (pendingPanelForce || !editorIsBusy()) {
+        setHtml("panel-pending", f.pendingHtml);
+        pendingPanelForce = false;
+      }
 
       // Freshly swapped-in panels carry server-timezone fallbacks.
       applyLocalTimes();
