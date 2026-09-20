@@ -327,18 +327,44 @@ async function fetchGameSummary(gameId) {
     console.error("Summary fetch failed:", err.message);
     return null;
   }
-  const data = await res.json();
-  return data.boxscore || null;
+  return await res.json();
 }
 
 // Flatten every play out of every drive (previous + current, if present) and
 // sort by ESPN's own sequenceNumber so we get true chronological order
 // regardless of how the API happens to order the drives array.
-function extractPlays(boxscore) {
-  if (!boxscore?.drives) return [];
-  const drives = [...(boxscore.drives.previous || [])];
-  if (boxscore.drives.current) drives.push(boxscore.drives.current);
-  const plays = drives.flatMap((d) => d.plays || []);
+function extractPlays(summary) {
+  // ESPN returns drives at the top level of the summary payload — `boxscore`
+  // holds only players and teams. Accept either shape so a difference between
+  // the mirror hosts cannot silently empty the play list.
+  const source = summary?.drives || summary?.boxscore?.drives;
+  if (!source) {
+    if (summary) {
+      console.warn(
+        "ESPN summary carried no drives — key-play detection is inactive. Keys:",
+        Object.keys(summary).join(",")
+      );
+    }
+    return [];
+  }
+  const drives = [...(source.previous || [])];
+  if (source.current) drives.push(source.current);
+
+  // ESPN usually lists the in-progress drive in BOTH `current` and the tail of
+  // `previous`, so flattening blindly repeats its plays — which inflates the
+  // play count the poll loop uses as a cursor. Keep the first of each id.
+  const seen = new Set();
+  const plays = [];
+  for (const d of drives) {
+    for (const play of d.plays || []) {
+      const id = play?.id;
+      if (id != null) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      plays.push(play);
+    }
+  }
   plays.sort((a, b) => Number(a.sequenceNumber || 0) - Number(b.sequenceNumber || 0));
   return plays;
 }
@@ -372,7 +398,20 @@ function parseGameState(competition, plays) {
   const statusDetail = status.type?.shortDetail || status.type?.detail || "";
 
   const latestPlay = plays.length > 0 ? plays[plays.length - 1] : null;
-  const end = latestPlay?.end;
+
+  // The newest play is often administrative — a timeout, an end of period, a
+  // score — and carries down = -1 with no down & distance text. Walk back to
+  // the last play that had a real down so the situation keeps showing rather
+  // than blanking out between possessions.
+  let situationEnd = null;
+  for (let i = plays.length - 1; i >= 0; i--) {
+    const e = plays[i]?.end;
+    if (e && typeof e.down === "number" && e.down > 0) {
+      situationEnd = e;
+      break;
+    }
+  }
+  const end = situationEnd || latestPlay?.end;
 
   const downDistanceText = end?.downDistanceText || end?.shortDownDistanceText || "";
   const possessionText = end?.possessionText || "";
@@ -1253,8 +1292,8 @@ async function poll() {
       return;
     }
 
-    const boxscore = await fetchGameSummary(gameId);
-    const plays = extractPlays(boxscore);
+    const summary = await fetchGameSummary(gameId);
+    const plays = extractPlays(summary);
     const gs = parseGameState(competition, plays);
     if (!gs) {
       state.error = "Could not parse game state (team match failed)";
