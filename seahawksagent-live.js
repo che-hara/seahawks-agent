@@ -437,7 +437,11 @@ function parseGameState(competition, plays) {
     downDistanceText,
     possessionText,
     isRedZone,
+    yardsToEndzone,
     isSeahawksPossession,
+    seahawksAbbrev: seahawksC.team?.abbreviation || "SEA",
+    opponentAbbrev: opponentC.team?.abbreviation || "OPP",
+    opponentColor: opponentC.team?.color || "",
     recentPlays,
     isAway,
     seahawksTeamId,
@@ -734,21 +738,61 @@ function dashboardFragments() {
 
   const phaseClass = `phase-${state.phase.replace("-", "")}`;
 
+  // Ball position as a percentage of the 100-yard field measured from Seattle's
+  // own goal line, so 0 is Seattle's end zone and 100 is the opponent's.
+  // yardsToEndzone counts down to whichever end zone the team in possession is
+  // driving towards, so which way it points depends on who has the ball.
+  function ballPercent(gs) {
+    if (typeof gs.yardsToEndzone !== "number") return null;
+    const pct = gs.isSeahawksPossession ? 100 - gs.yardsToEndzone : gs.yardsToEndzone;
+    return Math.max(0, Math.min(100, pct));
+  }
+
+  const YARD_NUMBERS = [10, 20, 30, 40, 50, 40, 30, 20, 10];
+
   function fieldHtml(gs) {
-    // Ball position as % of a 100-yard field, measured from Seattle's own
-    // goal line, computed from yardsToEndzone of whichever team has it.
-    // We don't have that raw number on gameState (only in the latest play),
-    // so this reads possessionText/downDistanceText directly instead of
-    // trying to re-derive an exact yard marker — simpler and always correct
-    // even when the API omits a field we'd need to compute a precise %.
+    const pct = ballPercent(gs);
+    const oppColor = /^[0-9a-fA-F]{6}$/.test(gs.opponentColor || "")
+      ? `#${gs.opponentColor}`
+      : "#54627a";
+
+    // downDistanceText already reads "3rd & Goal at ARI 7"; the yard line is
+    // shown separately, so drop the trailing "at ..." rather than repeat it.
+    const shortDD = (gs.downDistanceText || "").replace(/\s+at\s+.*$/, "").trim();
+    const headline = shortDD
+      ? `${escapeHtml(shortDD)}${gs.possessionText ? ` <span class="situation-spot">· ${escapeHtml(gs.possessionText)}</span>` : ""}`
+      : "—";
+
+    const lines = YARD_NUMBERS.map(
+      (n, i) => `<span class="yardline${i === 4 ? " yardline-mid" : ""}" style="left:${(i + 1) * 10}%"></span>`
+    ).join("");
+    const nums = YARD_NUMBERS.map(
+      (n, i) => `<span style="left:${(i + 1) * 10}%">${n}</span>`
+    ).join("");
+    const ball =
+      pct === null
+        ? ""
+        : `<span class="ball-marker" style="left:${pct}%"><span class="ball-stem"></span><span class="ball-dot"></span></span>`;
+
     return `
       <div class="situation-wrap">
-        <div class="situation-main">${escapeHtml(gs.downDistanceText || "—")}</div>
+        <div class="situation-main">${headline}</div>
         <div class="situation-sub">
           <span class="poss-dot ${gs.isSeahawksPossession ? "poss-sea" : "poss-opp"}"></span>
           ${gs.isSeahawksPossession ? "Seattle" : escapeHtml(gs.opponent)} ball
-          ${gs.possessionText ? ` · ${escapeHtml(gs.possessionText)}` : ""}
           ${gs.isRedZone ? `<span class="redzone-badge">RED ZONE</span>` : ""}
+        </div>
+        <div class="field-wrap">
+          <div class="field" role="img" aria-label="${escapeHtml(
+            pct === null
+              ? "Ball position unavailable"
+              : `Ball at ${gs.possessionText || `${pct} yards from Seattle's goal line`}`
+          )}">
+            <div class="endzone endzone-sea">${escapeHtml(gs.seahawksAbbrev)}</div>
+            <div class="field-mid">${lines}${ball}</div>
+            <div class="endzone" style="background:${oppColor}">${escapeHtml(gs.opponentAbbrev)}</div>
+          </div>
+          <div class="field-nums">${nums}</div>
         </div>
       </div>`;
   }
@@ -961,6 +1005,47 @@ function renderDashboard() {
       flex-wrap: wrap;
     }
     .poss-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .situation-spot { color: #cfe3f5; }
+
+    /* Field position graphic */
+    .field-wrap { margin-top: 12px; }
+    .field {
+      display: flex;
+      height: 26px;
+      border-radius: 5px;
+      overflow: hidden;
+      border: 1px solid #1f3247;
+    }
+    .endzone {
+      flex: 0 0 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 11px;
+      letter-spacing: 1px;
+      color: #fff;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+    }
+    .endzone-sea { background: #002a5c; }
+    .field-mid {
+      position: relative;
+      flex: 1 1 auto;
+      background: linear-gradient(180deg, #15361f 0%, #0d2415 100%);
+    }
+    .yardline { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.12); }
+    .yardline-mid { background: rgba(255,255,255,0.3); }
+    .ball-marker { position: absolute; top: 0; bottom: 0; transform: translateX(-50%); display: flex; align-items: center; }
+    .ball-stem { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: #69be28; }
+    .ball-dot {
+      position: relative; width: 9px; height: 9px; border-radius: 50%;
+      background: #fff; box-shadow: 0 0 0 2px #69be28, 0 0 6px rgba(105,190,40,0.7);
+    }
+    .field-nums { position: relative; height: 13px; margin: 4px 34px 0; }
+    .field-nums span {
+      position: absolute; transform: translateX(-50%);
+      font-size: 9px; color: #5a7085; letter-spacing: 0.5px;
+    }
     .poss-sea { background: #69be28; }
     .poss-opp { background: #6a7a8a; }
     .redzone-badge {
