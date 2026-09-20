@@ -44,7 +44,7 @@ down and starts watching for next week's matchup.
 | `BLUESKY_USERNAME`   | yes      | —                     | Handle or email                            |
 | `BLUESKY_PASSWORD`   | yes      | —                     | Use an **app password**                    |
 | `BLUESKY_HANDLE`     | no       | `likeablechelsey.com` | Handle used for attribution                |
-| `DASHBOARD_PASSWORD` | no       | `gohawks`             | Gates the approval dashboard               |
+| `DASHBOARD_PASSWORD` | yes      | —                     | Gates the dashboard; the agent exits if unset |
 | `PORT`               | no       | `3000`                | Railway sets this automatically            |
 
 ## Running locally
@@ -55,7 +55,17 @@ cp .env.example .env   # then fill it in
 node --env-file=.env seahawksagent.js
 ```
 
-The dashboard is at `http://localhost:3000`.
+The dashboard is at `http://localhost:3000`. It is protected with HTTP Basic
+auth, so the browser prompts on first load — the username is ignored, enter
+`DASHBOARD_PASSWORD` as the password.
+
+There is deliberately no default password. The dashboard is the only thing
+between a generated post and the public timeline, so the agent refuses to
+start unless `DASHBOARD_PASSWORD` is set. Generate one with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(18).toString('base64url'))"
+```
 
 ## Deploying
 

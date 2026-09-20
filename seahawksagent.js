@@ -17,7 +17,8 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const BLUESKY_USERNAME = process.env.BLUESKY_USERNAME;
 const BLUESKY_PASSWORD = process.env.BLUESKY_PASSWORD;
 const BLUESKY_HANDLE = process.env.BLUESKY_HANDLE || "likeablechelsey.com";
-const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "gohawks";
+// Required. No default on purpose — see the startup check in main().
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
 const PORT = parseInt(process.env.PORT || "3000");
 
 // Model that writes the post text. Override with ANTHROPIC_MODEL if needed.
@@ -1282,6 +1283,23 @@ async function runPollLoop() {
 
 async function main() {
   console.log("Seattle Seahawks Bluesky Agent v1.0 (NFL / ESPN)");
+
+  // The dashboard is the only thing standing between a generated post and the
+  // account's public timeline, so refuse to run rather than fall back to a
+  // default password that is published in this repository.
+  if (!DASHBOARD_PASSWORD || DASHBOARD_PASSWORD.trim() === "") {
+    console.error("FATAL: DASHBOARD_PASSWORD is not set.");
+    console.error("The approval dashboard would otherwise be unprotected, so the agent");
+    console.error("will not start. Set DASHBOARD_PASSWORD to a long random value —");
+    console.error("on Railway: service > Variables; locally: in your .env file.");
+    process.exit(1);
+  }
+  if (DASHBOARD_PASSWORD.length < 12) {
+    console.warn(
+      `WARNING: DASHBOARD_PASSWORD is only ${DASHBOARD_PASSWORD.length} characters. ` +
+        "The dashboard is reachable by anyone who finds the URL; prefer 20+ random characters."
+    );
+  }
 
   try {
     await blueskyLogin();
