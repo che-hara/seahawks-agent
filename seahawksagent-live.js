@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fetch from "node-fetch";
 import http from "http";
+import crypto from "crypto";
 
 // ============================================================================
 // CONFIGURATION
@@ -1090,8 +1091,31 @@ function renderDashboard() {
 // HTTP SERVER
 // ============================================================================
 
+// Constant-time compare so the password can't be recovered a byte at a time
+// from response timings.
+function safeEqual(a, b) {
+  const ba = Buffer.from(String(a), "utf8");
+  const bb = Buffer.from(String(b), "utf8");
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+// A browser navigating to "/" cannot attach a custom header, so the page is
+// gated with HTTP Basic auth — the browser prompts once and then replays the
+// credentials on the in-page fetches automatically. The dashboard's own
+// X-Dashboard-Password header is still accepted so scripted callers keep
+// working. The Basic username is ignored; only the password is checked.
 function checkDashboardAuth(req) {
-  return (req.headers["x-dashboard-password"] || "") === DASHBOARD_PASSWORD;
+  const headerPw = req.headers["x-dashboard-password"];
+  if (headerPw && safeEqual(headerPw, DASHBOARD_PASSWORD)) return true;
+
+  const auth = req.headers.authorization || "";
+  if (auth.startsWith("Basic ")) {
+    const decoded = Buffer.from(auth.slice(6), "base64").toString("utf8");
+    const sep = decoded.indexOf(":");
+    if (sep !== -1 && safeEqual(decoded.slice(sep + 1), DASHBOARD_PASSWORD)) return true;
+  }
+  return false;
 }
 
 function serveDashboard() {
@@ -1100,6 +1124,17 @@ function serveDashboard() {
     const method = req.method;
 
     if (pathname === "/" || pathname === "") {
+      if (!checkDashboardAuth(req)) {
+        // Only the page itself offers Basic auth. The /api routes below answer
+        // with a plain 401 so an expired in-page fetch can't pop a browser
+        // credential dialog on top of the dashboard.
+        res.writeHead(401, {
+          "WWW-Authenticate": 'Basic realm="Seahawks Agent", charset="UTF-8"',
+          "Content-Type": "text/plain; charset=utf-8",
+        });
+        res.end("Unauthorized");
+        return;
+      }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(renderDashboard());
       return;
