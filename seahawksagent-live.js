@@ -436,10 +436,7 @@ function resetForNextGame(finishedId) {
   firstLivePoll = true;
 }
 
-// `commit` records this poll's score as the new baseline. Pass false when the
-// agent cannot act on what it sees, so the change stays pending rather than
-// being swallowed.
-function analyzeMomentum(gameState, commit = true) {
+function analyzeMomentum(gameState) {
   let momentum = "";
 
   if (previousSeahawksScore !== null) {
@@ -452,10 +449,8 @@ function analyzeMomentum(gameState, commit = true) {
       momentum = "Opponent scores...";
   }
 
-  if (commit) {
-    previousSeahawksScore = gameState.seahawksScore;
-    previousOpponentScore = gameState.opponentScore;
-  }
+  previousSeahawksScore = gameState.seahawksScore;
+  previousOpponentScore = gameState.opponentScore;
 
   return {
     momentum,
@@ -480,6 +475,13 @@ const KEY_PLAY_PRIORITY = [
 ];
 
 const BIG_PLAY_YARDS = 20;
+
+// Ranks for triggers that are not key plays, on the same scale as
+// KEY_PLAY_PRIORITY (lower is more noteworthy). A draft written at
+// CHECK_IN_PRIORITY is the least noteworthy thing there is, so anything at
+// all can replace it.
+const QUARTER_PRIORITY = KEY_PLAY_PRIORITY.length;
+const CHECK_IN_PRIORITY = KEY_PLAY_PRIORITY.length + 1;
 
 function classifyPlay(play, seahawksTeamId) {
   const typeText = (play.type?.text || "").toLowerCase();
@@ -1316,23 +1318,35 @@ async function poll() {
       state.recentPosts = await fetchMyPosts();
     }
 
-    // A post already awaiting approval blocks queueing another one, so this
-    // poll must not consume what it sees: leave the play window and the score
-    // baseline where they are until the queue clears. Otherwise a touchdown
-    // that lands while a post sits unapproved is dropped and can never be
-    // posted about. Plays covered by the pending post were already consumed
-    // when it was queued, so clearing the queue re-examines only what has
-    // happened since — a rejected post is not re-offered.
-    const canAct = !state.pendingPost;
-    const momentum = analyzeMomentum(gs, canAct);
+    // Every poll can act now — an empty queue gets filled and an existing
+    // draft gets rewritten — so nothing has to be held back for later.
+    const momentum = analyzeMomentum(gs);
     const keyPlay = findKeyPlay(plays, state.lastPlayIndex, gs.seahawksTeamId);
-    if (canAct) state.lastPlayIndex = plays.length;
+    state.lastPlayIndex = plays.length;
 
     const newQuarter = gs.quarter > state.lastQuarterPosted;
+
+    // How noteworthy this poll is, on the KEY_PLAY_PRIORITY scale. A score
+    // change ranks with the scoring play that produced it; a quarter rollover
+    // sits just above a plain check-in.
+    const priority = keyPlay
+      ? KEY_PLAY_PRIORITY.indexOf(keyPlay.category)
+      : momentum.momentum !== ""
+      ? 0
+      : newQuarter
+      ? QUARTER_PRIORITY
+      : CHECK_IN_PRIORITY;
+    const draftPriority = state.pendingPost?.priority ?? CHECK_IN_PRIORITY;
+
+    // Never leave the approval queue empty: an empty slot is filled with
+    // whatever the game currently offers, falling back to a check-in when
+    // nothing has happened. An existing draft is rewritten once something at
+    // least as noteworthy has happened since it was written, so a late sack
+    // cannot overwrite a post about a touchdown.
     const shouldQueue =
-      (momentum.momentum !== "" || joiningMidGame || keyPlay !== null || newQuarter) &&
-      !state.pendingPost &&
-      state.postCount < MAX_POSTS;
+      state.postCount < MAX_POSTS &&
+      (!state.pendingPost ||
+        (priority < CHECK_IN_PRIORITY && priority <= draftPriority));
 
     if (shouldQueue) {
       state.lastQuarterPosted = gs.quarter;
@@ -1340,13 +1354,16 @@ async function poll() {
         ? "Joining mid-game"
         : keyPlay
         ? `Key play: ${keyPlay.category}`
+        : momentum.momentum
+        ? momentum.momentum
         : newQuarter
         ? `${ordinalPeriod(gs.quarter)} quarter check-in`
-        : momentum.momentum;
-      console.log(`${reason} — generating post...`);
+        : "Nothing new — check-in";
+      const action = state.pendingPost ? "rewriting pending post" : "generating post";
+      console.log(`${reason} — ${action}...`);
       const text = await generateFanReactionPost(gs, momentum, state.fanSentiment, keyPlay, state.vibe);
       if (text) {
-        state.pendingPost = { text, generatedAt: new Date().toISOString() };
+        state.pendingPost = { text, generatedAt: new Date().toISOString(), priority };
         console.log(`Queued for approval: "${text}"`);
       }
     }
