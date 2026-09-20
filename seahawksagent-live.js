@@ -373,6 +373,16 @@ function extractPlays(summary) {
 // GAME STATE PARSING
 // ============================================================================
 
+// Apple Sports-style headline for a play: the yardage gained or lost followed
+// by the play type. Administrative entries (timeouts, end of period) and plays
+// that went nowhere (incompletions) carry statYardage 0, where a yardage
+// prefix would read oddly, so those show the bare type.
+function playTitle(p) {
+  const type = p?.type?.text || "Play";
+  const yards = typeof p?.statYardage === "number" ? p.statYardage : null;
+  return yards === null || yards === 0 ? type : `${yards} Yard ${type}`;
+}
+
 function ordinalPeriod(n) {
   if (n === 1) return "1st";
   if (n === 2) return "2nd";
@@ -426,6 +436,24 @@ function parseGameState(competition, plays) {
     .map((p) => p.text || "")
     .filter(Boolean);
 
+  // Newest first, for the play viewer on the dashboard. Carries the ESPN play
+  // id so the browser can keep showing the same play across refreshes rather
+  // than the same position in a list that shifts as plays arrive.
+  const playFeed = plays
+    .slice(-20)
+    .reverse()
+    .filter((p) => p?.text)
+    .map((p) => ({
+      id: String(p.id ?? p.sequenceNumber ?? ""),
+      title: playTitle(p),
+      text: p.text,
+      clock: p.clock?.displayValue || "",
+      period: p.period?.number || null,
+      down: p.start?.downDistanceText || "",
+      scoring: !!p.scoringPlay,
+      turnover: !!p.isTurnover,
+    }));
+
   return {
     abstractState,
     statusDetail,
@@ -443,6 +471,7 @@ function parseGameState(competition, plays) {
     opponentAbbrev: opponentC.team?.abbreviation || "OPP",
     opponentColor: opponentC.team?.color || "",
     recentPlays,
+    playFeed,
     isAway,
     seahawksTeamId,
     opponentTeamId,
@@ -868,12 +897,52 @@ function dashboardFragments() {
     pendingHtml,
     recentHtml,
     sentimentHtml,
-    vibeHtml: state.vibe
-      ? `<div class="vibe-text">${escapeHtml(state.vibe)}</div>`
-      : `<div class="empty-msg">Analyzing...</div>`,
+    vibeHtml:
+      (state.vibe
+        ? `<div class="vibe-text">${escapeHtml(state.vibe)}</div>`
+        : `<div class="empty-msg">Analyzing...</div>`) + playFeedHtml(),
     counterHtml: `${state.postCount} / ${MAX_POSTS} posts used this game`,
     lastUpdated: state.lastUpdated,
   };
+}
+
+// One play at a time, newest first, with the rest kept in the DOM so the
+// browser can step back through them without another request.
+function playFeedHtml() {
+  const feed = state.gameState?.playFeed || [];
+  if (feed.length === 0) {
+    return `<div class="play-feed"><div class="empty-msg">No plays yet</div></div>`;
+  }
+  const items = feed
+    .map(
+      (p, i) => `
+      <div class="play-item" data-play-id="${escapeHtml(p.id)}"${i === 0 ? "" : " hidden"}>
+        <div class="play-head">
+          <span class="play-title">${escapeHtml(p.title)}</span>
+          ${p.scoring ? `<span class="play-badge play-badge-score">SCORE</span>` : ""}
+          ${p.turnover ? `<span class="play-badge play-badge-to">TURNOVER</span>` : ""}
+        </div>
+        <div class="play-text">${escapeHtml(p.text)}</div>
+        <div class="play-meta">${[
+          p.clock,
+          p.period ? ordinalPeriod(p.period) : "",
+          p.down,
+        ]
+          .filter(Boolean)
+          .map((s) => escapeHtml(s))
+          .join(" · ")}</div>
+      </div>`
+    )
+    .join("");
+  return `
+    <div class="play-feed" id="play-feed">
+      <div class="play-stage">${items}</div>
+      <div class="play-nav">
+        <button class="play-btn" id="play-prev" onclick="stepPlay(1)" aria-label="Older play">&lsaquo;</button>
+        <span class="play-pos" id="play-pos"></span>
+        <button class="play-btn" id="play-next" onclick="stepPlay(-1)" aria-label="Newer play">&rsaquo;</button>
+      </div>
+    </div>`;
 }
 
 function renderDashboard() {
@@ -1092,6 +1161,27 @@ function renderDashboard() {
     /* Vibe */
     .vibe-text { font-size: 14px; line-height: 1.7; color: #b0d8c4; }
 
+    /* Play-by-play viewer */
+    .play-feed { margin-top: 14px; padding-top: 12px; border-top: 1px solid #1a2b40; }
+    .play-item[hidden] { display: none; }
+    .play-stage { min-height: 78px; }
+    .play-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; }
+    .play-title { font-family: 'Bebas Neue', sans-serif; font-size: 16px; letter-spacing: 1px; color: #e0e6f0; }
+    .play-badge { font-size: 9px; letter-spacing: 1px; padding: 2px 7px; border-radius: 9px; }
+    .play-badge-score { background: #0a3a1a; color: #7dfc9e; border: 1px solid #2fa84f; }
+    .play-badge-to { background: #3a1010; color: #ff8a8a; border: 1px solid #aa3333; }
+    .play-text { font-size: 13px; line-height: 1.5; color: #b8c9da; }
+    .play-meta { margin-top: 6px; font-size: 11px; color: #5a7085; }
+    .play-nav { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+    .play-btn {
+      background: #132234; color: #8fb7d8; border: 1px solid #23394f;
+      width: 28px; height: 25px; border-radius: 5px; cursor: pointer;
+      font-size: 15px; line-height: 1; padding: 0;
+    }
+    .play-btn:hover:not(:disabled) { background: #1b3048; color: #cfe3f5; }
+    .play-btn:disabled { opacity: 0.3; cursor: default; }
+    .play-pos { font-size: 10px; letter-spacing: 1px; color: #5a7085; min-width: 56px; text-align: center; }
+
     /* Fan sentiment */
     .sentiment-item {
       font-size: 13px; color: #8899aa; line-height: 1.5;
@@ -1160,6 +1250,46 @@ function renderDashboard() {
           ? d.toLocaleTimeString()
           : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       });
+    }
+
+    // null means "follow the newest play". Once you step back it holds a play
+    // id rather than an index, so a refresh that prepends new plays keeps you
+    // on the play you were reading instead of sliding you along the list.
+    let selectedPlayId = null;
+
+    function playEls() {
+      return Array.from(document.querySelectorAll("#play-feed .play-item"));
+    }
+
+    function currentPlayIndex(els) {
+      if (!selectedPlayId) return 0;
+      const i = els.findIndex((el) => el.getAttribute("data-play-id") === selectedPlayId);
+      if (i === -1) selectedPlayId = null;   // that play aged out of the window
+      return i === -1 ? 0 : i;
+    }
+
+    function renderPlay() {
+      const els = playEls();
+      if (els.length === 0) return;
+      const idx = currentPlayIndex(els);
+      els.forEach((el, i) => { el.hidden = i !== idx; });
+      const pos = document.getElementById("play-pos");
+      // Plain concatenation on purpose: this script is emitted from a
+      // server-side template literal, so a placeholder here would be
+      // interpolated away before it ever reaches the browser.
+      if (pos) pos.textContent = idx === 0 ? "LATEST" : (idx + 1) + " of " + els.length;
+      const older = document.getElementById("play-prev");
+      const newer = document.getElementById("play-next");
+      if (older) older.disabled = idx >= els.length - 1;
+      if (newer) newer.disabled = idx <= 0;
+    }
+
+    function stepPlay(delta) {
+      const els = playEls();
+      if (els.length === 0) return;
+      const idx = Math.max(0, Math.min(els.length - 1, currentPlayIndex(els) + delta));
+      selectedPlayId = idx === 0 ? null : els[idx].getAttribute("data-play-id");
+      renderPlay();
     }
 
     async function apiFetch(path, opts = {}) {
@@ -1266,6 +1396,8 @@ function renderDashboard() {
 
       setHtml("panel-score", f.scoreHtml);
       setHtml("panel-vibe", f.vibeHtml);
+      // The panel was just replaced, so restore whichever play was on screen.
+      renderPlay();
       setHtml("panel-recent", f.recentHtml);
       setHtml("panel-sentiment", f.sentimentHtml);
       setHtml("posts-counter", f.counterHtml);
@@ -1284,6 +1416,7 @@ function renderDashboard() {
 
     checkAuth();
     applyLocalTimes();
+    renderPlay();
     refresh();
   </script>
 </body>
