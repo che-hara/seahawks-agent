@@ -39,7 +39,7 @@ const FINAL_HOLD_MS = 3 * 60 * 60 * 1000;
 const POLL_INTERVALS = {
   waiting: 5 * 60 * 1000,
   preview: 60 * 1000,
-  live: 30 * 1000,
+  live: 10 * 1000,
   final: 5 * 60 * 1000,
 };
 
@@ -1490,7 +1490,26 @@ async function poll() {
     }
 
     const gameId = state.game.id;
-    const competition = await refreshCompetitionFromScoreboard(gameId);
+
+    // While the game is running the summary's own header carries the score,
+    // clock, period and both competitors — everything parseGameState needs —
+    // so the scoreboard request is redundant. Skipping it spends the request
+    // budget on polling more often instead, which is what actually makes the
+    // dashboard feel live. Every other phase still goes through the
+    // scoreboard, which is also how a schedule rollover gets noticed.
+    let summary = null;
+    let competition = null;
+
+    if (state.phase === "live") {
+      summary = await fetchGameSummary(gameId);
+      competition = summary?.header?.competitions?.[0] || null;
+    }
+
+    if (!competition) {
+      // Either not live, or the summary came back unusable — fall back.
+      competition = await refreshCompetitionFromScoreboard(gameId);
+    }
+
     if (!competition) {
       // The tracked event has dropped off the current week's scoreboard, which
       // means the schedule has rolled forward. Let go of it so the next poll
@@ -1508,7 +1527,7 @@ async function poll() {
       return;
     }
 
-    const summary = await fetchGameSummary(gameId);
+    if (!summary) summary = await fetchGameSummary(gameId);
     const plays = extractPlays(summary);
     const gs = parseGameState(competition, plays);
     if (!gs) {
