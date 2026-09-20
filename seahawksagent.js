@@ -747,7 +747,11 @@ function renderDashboard() {
       ? state.recentPosts
           .map((p) => {
             const bskyUrl = bskyPostUrl(p.uri, blueskyHandle());
-            const time = new Date(p.postedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            // Formatted here in the container's timezone only as a fallback —
+            // the browser restates it in the viewer's timezone from data-ts.
+            const time = `<time data-ts="${escapeHtml(p.postedAt)}">${escapeHtml(
+              new Date(p.postedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            )}</time>`;
             return `<div class="recent-post">
               <span class="recent-text">${escapeHtml(p.text)}</span>
               <span class="post-time">${bskyUrl ? `<a href="${bskyUrl}" target="_blank" rel="noopener" style="color:#69be28;text-decoration:none;">${time} ↗</a>` : time}</span>
@@ -964,7 +968,9 @@ function renderDashboard() {
   <header>
     <h1>Seahawks Agent</h1>
     <span class="status-pill ${phaseClass}"><span class="dot"></span>${phaseLabel}</span>
-    <span class="last-updated" id="ts">${state.lastUpdated ? new Date(state.lastUpdated).toLocaleTimeString() : "--"}</span>
+    <span class="last-updated" id="ts"${
+      state.lastUpdated ? ` data-ts="${state.lastUpdated}" data-ts-seconds` : ""
+    }>${state.lastUpdated ? new Date(state.lastUpdated).toLocaleTimeString() : "--"}</span>
   </header>
   <main>
     <div class="card">
@@ -992,6 +998,22 @@ function renderDashboard() {
 
   <script>
     const pw = sessionStorage.getItem("pw") || "";
+
+    // Timestamps are rendered server-side in whatever timezone the container
+    // runs in (UTC on Railway) and carry their ISO value in data-ts. Restate
+    // them in the viewer's own timezone so the header and the post times
+    // cannot disagree with each other.
+    function applyLocalTimes(root) {
+      (root || document).querySelectorAll("[data-ts]").forEach((el) => {
+        const iso = el.getAttribute("data-ts");
+        if (!iso) return;
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return;
+        el.textContent = el.hasAttribute("data-ts-seconds")
+          ? d.toLocaleTimeString()
+          : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      });
+    }
 
     async function apiFetch(path, opts = {}) {
       return fetch(path, {
@@ -1050,8 +1072,10 @@ function renderDashboard() {
       const r = await apiFetch("/api/state");
       if (!r.ok) return;
       const data = await r.json();
-      if (data.lastUpdated) {
-        document.getElementById("ts").textContent = new Date(data.lastUpdated).toLocaleTimeString();
+      const ts = document.getElementById("ts");
+      if (ts && data.lastUpdated) {
+        ts.setAttribute("data-ts", data.lastUpdated);
+        applyLocalTimes();
       }
       const hasPending = !!data.pendingPost;
       const showingPending = document.querySelector(".pending-post") !== null;
@@ -1059,6 +1083,7 @@ function renderDashboard() {
     }
 
     setInterval(refreshTimestamp, 5000);
+    applyLocalTimes();
     checkAuth();
   </script>
 </body>
