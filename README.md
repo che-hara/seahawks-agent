@@ -43,7 +43,6 @@ down and starts watching for next week's matchup.
 | `ANTHROPIC_MODEL`    | no       | `claude-sonnet-5`     | Model that writes the post text             |
 | `BLUESKY_USERNAME`   | yes      | —                     | Handle or email                            |
 | `BLUESKY_PASSWORD`   | yes      | —                     | Use an **app password**                    |
-| `BLUESKY_HANDLE`     | no       | `likeablechelsey.com` | Handle used for attribution                |
 | `DASHBOARD_PASSWORD` | yes      | —                     | Gates the dashboard; the agent exits if unset |
 | `PORT`               | no       | `3000`                | Railway sets this automatically            |
 

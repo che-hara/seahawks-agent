@@ -16,7 +16,6 @@ import crypto from "crypto";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const BLUESKY_USERNAME = process.env.BLUESKY_USERNAME;
 const BLUESKY_PASSWORD = process.env.BLUESKY_PASSWORD;
-const BLUESKY_HANDLE = process.env.BLUESKY_HANDLE || "likeablechelsey.com";
 // Required. No default on purpose — see the startup check in main().
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
 const PORT = parseInt(process.env.PORT || "3000");
@@ -69,6 +68,13 @@ const state = {
 // ============================================================================
 
 let blueskySession = null;
+
+// The posting account's own handle, read off the login session rather than
+// configuration, so it cannot drift out of sync with the account actually being
+// posted to and follows along if that account is renamed or swapped out.
+function blueskyHandle() {
+  return blueskySession?.handle || blueskySession?.did || "";
+}
 
 async function blueskyLogin() {
   const res = await fetch("https://bsky.social/xrpc/com.atproto.server.createSession", {
@@ -165,7 +171,9 @@ async function fetchMyPosts() {
   if (!blueskySession) return [];
   try {
     const res = await fetch(
-      `https://bsky.social/xrpc/app.bsky.feed.getAuthorFeed?actor=${BLUESKY_HANDLE}&limit=8&filter=posts_no_replies`,
+      `https://bsky.social/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(
+        blueskySession.did
+      )}&limit=8&filter=posts_no_replies`,
       { headers: { Authorization: `Bearer ${blueskySession.accessJwt}` } }
     );
     if (!res.ok) {
@@ -697,7 +705,7 @@ function dashboardFragments() {
     state.recentPosts.length > 0
       ? state.recentPosts
           .map((p) => {
-            const bskyUrl = bskyPostUrl(p.uri, BLUESKY_HANDLE);
+            const bskyUrl = bskyPostUrl(p.uri, blueskyHandle());
             const time = new Date(p.postedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
             return `<div class="recent-post">
               <span class="recent-text">${escapeHtml(p.text)}</span>
