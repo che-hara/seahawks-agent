@@ -436,7 +436,10 @@ function resetForNextGame(finishedId) {
   firstLivePoll = true;
 }
 
-function analyzeMomentum(gameState) {
+// `commit` records this poll's score as the new baseline. Pass false when the
+// agent cannot act on what it sees, so the change stays pending rather than
+// being swallowed.
+function analyzeMomentum(gameState, commit = true) {
   let momentum = "";
 
   if (previousSeahawksScore !== null) {
@@ -449,8 +452,10 @@ function analyzeMomentum(gameState) {
       momentum = "Opponent scores...";
   }
 
-  previousSeahawksScore = gameState.seahawksScore;
-  previousOpponentScore = gameState.opponentScore;
+  if (commit) {
+    previousSeahawksScore = gameState.seahawksScore;
+    previousOpponentScore = gameState.opponentScore;
+  }
 
   return {
     momentum,
@@ -1229,9 +1234,17 @@ async function poll() {
       state.recentPosts = await fetchMyPosts();
     }
 
-    const momentum = analyzeMomentum(gs);
+    // A post already awaiting approval blocks queueing another one, so this
+    // poll must not consume what it sees: leave the play window and the score
+    // baseline where they are until the queue clears. Otherwise a touchdown
+    // that lands while a post sits unapproved is dropped and can never be
+    // posted about. Plays covered by the pending post were already consumed
+    // when it was queued, so clearing the queue re-examines only what has
+    // happened since — a rejected post is not re-offered.
+    const canAct = !state.pendingPost;
+    const momentum = analyzeMomentum(gs, canAct);
     const keyPlay = findKeyPlay(plays, state.lastPlayIndex, gs.seahawksTeamId);
-    state.lastPlayIndex = plays.length;
+    if (canAct) state.lastPlayIndex = plays.length;
 
     const newQuarter = gs.quarter > state.lastQuarterPosted;
     const shouldQueue =
