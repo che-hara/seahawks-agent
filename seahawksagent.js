@@ -553,11 +553,27 @@ function findKeyPlay(plays, fromIndex, seahawksTeamId) {
 // CLAUDE AI POST GENERATION
 // ============================================================================
 
-async function generateFanReactionPost(gameState, momentum, fanSentiment, keyPlay = null, vibe = "") {
+async function generateFanReactionPost(
+  gameState,
+  momentum,
+  fanSentiment,
+  keyPlay = null,
+  vibe = "",
+  recentPosts = []
+) {
   const diff = momentum.differential;
   const situation =
     diff > 0 ? `up by ${diff}` : diff < 0 ? `down by ${Math.abs(diff)}` : "tied";
   const isCheckIn = !momentum.momentum && !keyPlay;
+
+  // What this account has already said about this game. Without it the model
+  // has no idea it is repeating itself, which is glaring on back-to-back
+  // check-ins where there is no new play to hang a post on.
+  const alreadyPosted = (recentPosts || [])
+    .map((p) => (typeof p === "string" ? p : p?.text) || "")
+    .filter(Boolean)
+    .slice(0, 3);
+  const hasPosted = alreadyPosted.length > 0;
 
   let eventContext = "";
   if (keyPlay) {
@@ -566,7 +582,9 @@ async function generateFanReactionPost(gameState, momentum, fanSentiment, keyPla
   } else if (momentum.momentum) {
     eventContext = `JUST HAPPENED: ${momentum.momentum}`;
   } else {
-    eventContext = "CONTEXT: Just tuned in mid-game — write a check-in post about the current situation";
+    eventContext = hasPosted
+      ? "CONTEXT: Nothing new since your last post — write a fresh take on where the game stands right now"
+      : "CONTEXT: Just tuned in mid-game — write a check-in post about the current situation";
   }
 
   const situationLine = gameState.downDistanceText
@@ -594,9 +612,25 @@ ${vibe ? `\nGAME VIBE (use this to set the tone and emotional colour of your pos
         .map((f) => `- ${typeof f === "string" ? f : f.text}`)
         .join("\n")}`
     : ""
+}${
+  hasPosted
+    ? `\nYOU ALREADY POSTED THESE ABOUT THIS GAME (newest first):\n${alreadyPosted
+        .map((t) => `- ${t}`)
+        .join("\n")}`
+    : ""
 }
 
-Write a single Bluesky post. 1-2 sentences, under 260 characters (you need room for ${TEAM_HASHTAG}). Use "Seattle" rather than nicknames when referring to the team. Use emojis freely — lean on 💚💙🏈 especially. Always end with ${TEAM_HASHTAG}.${isCheckIn ? " Sound like you just turned on the game and are catching up." : ""}
+Write a single Bluesky post. 1-2 sentences, under 260 characters (you need room for ${TEAM_HASHTAG}). Use "Seattle" rather than nicknames when referring to the team. Use emojis freely — lean on 💚💙🏈 especially. Always end with ${TEAM_HASHTAG}.${
+    hasPosted
+      ? " Your previous posts are listed above: do not repeat their content, opening, joke or sentence shape. This has to read as a new thought, not a reworded version of one you already made."
+      : ""
+  }${
+    isCheckIn
+      ? hasPosted
+        ? " There is no new play to react to, so find a different angle on where things stand — the clock, the matchup, the nerves, anything you have not used yet."
+        : " Sound like you just turned on the game and are catching up."
+      : ""
+  }
 
 Reply with ONLY the post text.`;
 
@@ -1279,7 +1313,14 @@ async function poll() {
         : "Nothing new — check-in";
       const action = state.pendingPost ? "rewriting pending post" : "generating post";
       console.log(`${reason} — ${action}...`);
-      const text = await generateFanReactionPost(gs, momentum, state.fanSentiment, keyPlay, state.vibe);
+      const text = await generateFanReactionPost(
+        gs,
+        momentum,
+        state.fanSentiment,
+        keyPlay,
+        state.vibe,
+        state.recentPosts
+      );
       if (text) {
         state.pendingPost = { text, generatedAt: new Date().toISOString(), priority };
         console.log(`Queued for approval: "${text}"`);
